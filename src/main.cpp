@@ -33,44 +33,12 @@ void setup() {
 }
 
 void loop() {
-  Serial.println("Testing right motor: polarity A (IN1 HIGH, IN2 LOW)");
-  setRight(HIGH, LOW);
-  delay(2000);
-  stopRight();
-  delay(500);
-
-  Serial.println("Testing right motor: polarity B (IN1 LOW, IN2 HIGH)");
-  setRight(LOW, HIGH);
-  delay(2000);
-  stopRight();
-  delay(1000);
-
-  Serial.println("Testing left motor: polarity A (IN1 HIGH, IN2 LOW)");
-  setLeft(HIGH, LOW);
-  delay(2000);
-  stopLeft();
-  delay(500);
-
-  Serial.println("Testing left motor: polarity B (IN1 LOW, IN2 HIGH)");
-  setLeft(LOW, HIGH);
-  delay(2000);
-  stopLeft();
-  delay(1000);
-
-  Serial.println("Testing both motors forward (same polarity)");
+  Serial.println("Running both motors forward continuously");
   setRight(HIGH, LOW);
   setLeft(HIGH, LOW);
-  delay(3000);
-  stopAll();
-  delay(1000);
-
-  Serial.println("Testing both motors reverse (opposite polarity)");
-  setRight(LOW, HIGH);
-  setLeft(LOW, HIGH);
-  delay(3000);
-  stopAll();
-  Serial.println("Sequence complete. Pausing before repeating.");
-  delay(5000);
+  while(true) {
+    delay(1000);
+  }
 }
 
 void setRight(int a, int b) {
