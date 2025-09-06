@@ -1,7 +1,7 @@
 #include <Arduino.h>
 
 #define ENA_PIN 4
-#define ENB_PIN 1
+#define ENB_PIN 16
 #define L_IN1 2
 #define L_IN2 14
 #define R_IN1 15
@@ -11,180 +11,90 @@
 #define LEDC_FREQ 5000
 #define LEDC_RES 8
 
-class L298N {
-public:
-  enum Direction { FORWARD, BACKWARD, STOP };
-  typedef void(*CallBackFunction)();
-  L298N(uint8_t pinEnable, uint8_t pinIN1, uint8_t pinIN2, uint8_t ledcChannel) :  
-    _pinEnable(pinEnable), _pinIN1(pinIN1), _pinIN2(pinIN2), _ledcChannel(ledcChannel) {
-    _pwmVal = 0;
-    _isMoving = false;
-    _canMove = true;
-    _lastMs = 0;
-    _direction = STOP;
-    pinMode(_pinIN1, OUTPUT);
-    pinMode(_pinIN2, OUTPUT);
-    if(_pinEnable != (uint8_t)-1) {
-      ledcSetup(_ledcChannel, LEDC_FREQ, LEDC_RES);
-      ledcAttachPin(_pinEnable, _ledcChannel);
-      ledcWrite(_ledcChannel, 0);
-    }
-  }
+const int MIN_INNER_PWM = 20;
+const int BURST_PWM = 200;
+const int BURST_MS = 80;
+bool rightFlip = false;
+int curLeft = 0;
+int curRight = 0;
 
-  void setSpeed(unsigned short pwmVal) {
-    if(pwmVal > 255) pwmVal = 255;
-    _pwmVal = pwmVal;
-  }
-
-  unsigned short getSpeed() {
-    return this->isMoving() ? _pwmVal : 0;
-  }
-
-  uint8_t getLedcChannel() {
-    return _ledcChannel;
-  }
-
-  void forward() {
-    digitalWrite(_pinIN1, LOW);
-    digitalWrite(_pinIN2, HIGH);
-    if(_pinEnable != (uint8_t)-1) ledcWrite(_ledcChannel, _pwmVal);
-    _direction = FORWARD;
-    _isMoving = true;
-  }
-
-  void backward() {
-    digitalWrite(_pinIN1, HIGH);
-    digitalWrite(_pinIN2, LOW);
-    if(_pinEnable != (uint8_t)-1) ledcWrite(_ledcChannel, _pwmVal);
-    _direction = BACKWARD;
-    _isMoving = true;
-  }
-
-  void run(Direction direction) {
-    switch(direction) {
-      case BACKWARD:
-        this->backward();
-        break;
-      case FORWARD:
-        this->forward();
-        break;
-      case STOP:
-        this->stop();
-        break;
-    }
-  }
-
-  void runFor(unsigned long delayMs, Direction direction, CallBackFunction callback) {
-    if((_lastMs == 0) && _canMove) {
-      _lastMs = millis();
-      switch(direction) {
-        case FORWARD:
-          this->forward();
-          break;
-        case BACKWARD:
-          this->backward();
-          break;
-        case STOP:
-        default:
-          this->stop();
-          break;
-      }
-    }
-    if(((millis() - _lastMs) > delayMs) && _canMove) {
-      this->stop();
-      _lastMs = 0;
-      _canMove = false;
-      callback();
-    }
-  } 
-
-  void runFor(unsigned long delayMs, Direction direction) {
-    this->runFor(delayMs, direction, fakeCallback);
-  } 
-
-  void forwardFor(unsigned long delayMs, CallBackFunction callback) {
-    this->runFor(delayMs, FORWARD, callback);
-  } 
-
-  void forwardFor(unsigned long delayMs) {
-    this->runFor(delayMs, FORWARD);
-  } 
-
-  void backwardFor(unsigned long delayMs, CallBackFunction callback) {
-    this->runFor(delayMs, BACKWARD, callback);
-  } 
-
-  void backwardFor(unsigned long delayMs) {
-    this->runFor(delayMs, BACKWARD);
-  } 
-
-  void stop() {
-    digitalWrite(_pinIN1, LOW);
-    digitalWrite(_pinIN2, LOW);
-    if(_pinEnable != (uint8_t)-1) ledcWrite(_ledcChannel, 0);
-    _direction = STOP;
-    _isMoving = false;
-
-    _pwmVal = 0;
-  } 
-
-  void reset() {
-    _canMove = true;
-  } 
-
-  boolean isMoving() {
-    return _isMoving;
-  } 
-
-  Direction getDirection() {
-    return _direction;
-  } 
-
-  static void fakeCallback() {} 
-
-private:
-  uint8_t _pinEnable;
-  uint8_t _pinIN1;
-  uint8_t _pinIN2;
-  uint8_t _ledcChannel;
-  unsigned short _pwmVal;
-  boolean _isMoving;
-  boolean _canMove;
-  unsigned long _lastMs;
-  Direction _direction;
-};
-
-L298N leftMotor(ENA_PIN, L_IN1, L_IN2, ENA_CH);
-L298N rightMotor(ENB_PIN, R_IN1, R_IN2, ENB_CH);
-
-void setBothSpeedsImmediate(int left, int right) {
-  leftMotor.setSpeed(left);
-  rightMotor.setSpeed(right);
-  ledcWrite(leftMotor.getLedcChannel(), left);
-  ledcWrite(rightMotor.getLedcChannel(), right);
+int clampSigned(int v) {
+  if (v > 255) return 255;
+  if (v < -255) return -255;
+  return v;
 }
 
-void rampBothMotors(int leftTarget, int rightTarget, int stepDelay = 8) {
-  int currentLeft = leftMotor.getSpeed();
-  int currentRight = rightMotor.getSpeed();
-  while(currentLeft != leftTarget || currentRight != rightTarget) {
-    if (currentLeft < leftTarget) currentLeft++;
-    else if (currentLeft > leftTarget) currentLeft--;
-    if (currentRight < rightTarget) currentRight++;
-    else if (currentRight > rightTarget) currentRight--;
-    setBothSpeedsImmediate(currentLeft, currentRight);
+void setDirectionPins(int leftDir, int rightDir) {
+  int l = leftDir;
+  int r = rightDir;
+  if (r != 0 && rightFlip) r = -r;
+  if (l > 0) { digitalWrite(L_IN1, LOW); digitalWrite(L_IN2, HIGH); }
+  else if (l < 0) { digitalWrite(L_IN1, HIGH); digitalWrite(L_IN2, LOW); }
+  else { digitalWrite(L_IN1, LOW); digitalWrite(L_IN2, LOW); }
+  if (r > 0) { digitalWrite(R_IN1, LOW); digitalWrite(R_IN2, HIGH); }
+  else if (r < 0) { digitalWrite(R_IN1, HIGH); digitalWrite(R_IN2, LOW); }
+  else { digitalWrite(R_IN1, LOW); digitalWrite(R_IN2, LOW); }
+}
+
+void attachAndZeroPwm() {
+  pinMode(ENA_PIN, OUTPUT);
+  pinMode(ENB_PIN, OUTPUT);
+  digitalWrite(ENA_PIN, LOW);
+  digitalWrite(ENB_PIN, LOW);
+  ledcSetup(ENA_CH, LEDC_FREQ, LEDC_RES);
+  ledcSetup(ENB_CH, LEDC_FREQ, LEDC_RES);
+  ledcAttachPin(ENA_PIN, ENA_CH);
+  ledcAttachPin(ENB_PIN, ENB_CH);
+  ledcWrite(ENA_CH, 0);
+  ledcWrite(ENB_CH, 0);
+  curLeft = 0;
+  curRight = 0;
+}
+
+void applyPwmBoth(uint8_t leftVal, uint8_t rightVal) {
+  ledcWrite(ENA_CH, leftVal);
+  ledcWrite(ENB_CH, rightVal);
+  curLeft = leftVal;
+  curRight = rightVal;
+}
+
+void rampToTargetsWithBurst(int leftTarget, int rightTarget, int stepDelay = 8) {
+  leftTarget = clampSigned(leftTarget);
+  rightTarget = clampSigned(rightTarget);
+  int lSign = (leftTarget > 0) - (leftTarget < 0);
+  int rSign = (rightTarget > 0) - (rightTarget < 0);
+  int absL = abs(leftTarget);
+  int absR = abs(rightTarget);
+  if (absL == 0 && absR > 0) absL = min(MIN_INNER_PWM, absR);
+  if (absR == 0 && absL > 0) absR = min(MIN_INNER_PWM, absL);
+  setDirectionPins(lSign, rSign);
+  applyPwmBoth(0, 0);
+  int burstL = absL > 0 ? BURST_PWM : 0;
+  int burstR = absR > 0 ? BURST_PWM : 0;
+  if (burstL || burstR) {
+    applyPwmBoth(burstL, burstR);
+    delay(BURST_MS);
+  }
+  int l = min(burstL, absL);
+  int r = min(burstR, absR);
+  while (l != absL || r != absR) {
+    if (l < absL) l++;
+    else if (l > absL) l--;
+    if (r < absR) r++;
+    else if (r > absR) r--;
+    applyPwmBoth(l, r);
     delay(stepDelay);
   }
 }
 
-void driveCurveHold(int leftTarget, int rightTarget, int holdMs) {
-  leftMotor.run(L298N::FORWARD);
-  rightMotor.run(L298N::FORWARD);
-  rampBothMotors(leftTarget, rightTarget);
-  unsigned long t = millis();
-  while(millis() - t < holdMs) {
-    delay(10);
-  }
+void holdMs(unsigned long ms) {
+  unsigned long start = millis();
+  while (millis() - start < ms) delay(10);
+}
+
+void stopBothImmediate() {
+  applyPwmBoth(0, 0);
+  setDirectionPins(0, 0);
 }
 
 void setup() {
@@ -192,18 +102,25 @@ void setup() {
   pinMode(L_IN2, OUTPUT);
   pinMode(R_IN1, OUTPUT);
   pinMode(R_IN2, OUTPUT);
-  leftMotor.stop();
-  rightMotor.stop();
-  delay(400);
-
+  Serial.begin(115200);
+  attachAndZeroPwm();
+  stopBothImmediate();
+  unsigned long start = millis();
+  Serial.println("Ready. Type 'i' within 3s to invert right motor");
+  while (millis() - start < 3000 && Serial.available() == 0) delay(10);
+  if (Serial.available()) {
+    char c = Serial.read();
+    if (c == 'i' || c == 'I') { rightFlip = !rightFlip; Serial.print("rightFlip="); Serial.println(rightFlip); }
+  }
 }
 
 void loop() {
-  driveCurveHold(200, 120, 2000);
-  driveCurveHold(120, 200, 2000);
-  rampBothMotors(0, 0);
-  leftMotor.stop();
-  rightMotor.stop();
-  delay(5000);
+  rampToTargetsWithBurst(200, 120);
+  holdMs(1000);
+  rampToTargetsWithBurst(120, 200);
+  holdMs(1000);
+  rampToTargetsWithBurst(0, 0, 6);
+  stopBothImmediate();
+  delay(4000);
 }
 
